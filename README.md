@@ -3,8 +3,6 @@ Code for **CIA: Inferring the Communication Topology from LLM-based Multi-Agent 
 
 ![fig](CIA.png)
 
-Download Dataset(https://drive.google.com/drive/folders/1kC41trQo78Cok7ICmbVsNpJL0Y2Q4aNA?usp=drive_link)
-
 #### Stage 1: Obtain the trained generative topology model.
 We select three well-performing generative optimization strategies: [G-Designer](https://github.com/yanweiyue/GDesigner/tree/main), [AGP](https://github.com/Resurgamm/AGP), and [ARG-Designer](https://github.com/Shiy-Li/ARG-Designer/tree/main).
 
