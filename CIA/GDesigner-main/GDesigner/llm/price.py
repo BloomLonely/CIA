@@ -5,42 +5,38 @@ import tiktoken
 # DALL-E: https://openai.com/pricing
 
 def cal_token(model:str, text:str):
-    encoder = tiktoken.encoding_for_model(model)
+    # OpenRouter 형식(provider/model-name)에서 모델명만 추출
+    model_name = model.split('/')[-1] if '/' in model else model
+    try:
+        encoder = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        encoder = tiktoken.get_encoding("cl100k_base")
     num_tokens = len(encoder.encode(text))
     return num_tokens
 
 def cost_count(prompt, response, model_name):
-    branch: str
-    prompt_len: int
-    completion_len: int
-    price: float
+    # OpenRouter 형식(provider/model-name)에서 모델명만 추출
+    short_name = model_name.split('/')[-1] if '/' in model_name else model_name
 
     prompt_len = cal_token(model_name, prompt)
     completion_len = cal_token(model_name, response)
-    if "gpt-4" in model_name:
+
+    price = 0.0
+    if "gpt-4" in short_name:
         branch = "gpt-4"
-        price = prompt_len * OPENAI_MODEL_INFO[branch][model_name]["input"] /1000 + \
-                completion_len * OPENAI_MODEL_INFO[branch][model_name]["output"] /1000
-    elif "gpt-3.5" in model_name:
+        info = OPENAI_MODEL_INFO[branch].get(short_name)
+        if info:
+            price = prompt_len * info["input"] / 1000 + completion_len * info["output"] / 1000
+    elif "gpt-3.5" in short_name:
         branch = "gpt-3.5"
-        price = prompt_len * OPENAI_MODEL_INFO[branch][model_name]["input"] /1000 + \
-            completion_len * OPENAI_MODEL_INFO[branch][model_name]["output"] /1000
-    elif "dall-e" in model_name:
-        branch = "dall-e"
-        price = 0.0
-        prompt_len = 0
-        completion_len = 0
-    else:
-        branch = "other"
-        price = 0.0
-        prompt_len = 0
-        completion_len = 0
+        info = OPENAI_MODEL_INFO[branch].get(short_name)
+        if info:
+            price = prompt_len * info["input"] / 1000 + completion_len * info["output"] / 1000
 
     Cost.instance().value += price
     PromptTokens.instance().value += prompt_len
     CompletionTokens.instance().value += completion_len
 
-    # print(f"Prompt Tokens: {prompt_len}, Completion Tokens: {completion_len}")
     return price, prompt_len, completion_len
 
 OPENAI_MODEL_INFO ={

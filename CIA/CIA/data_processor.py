@@ -18,8 +18,7 @@ class GraphDataProcessor:
     def _calculate_similarity(self, text1: str, text2: str) -> float:
         if not text1 or not text2:
             return 0.0
-        return SequenceMatcher(None, te.
-        xt1.lower(), text2.lower()).ratio()
+        return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
     
     def _match_nodes_to_outputs(self, nodes: List[Dict], output_list: List[str]) -> Dict[str, int]:
         node_id_to_idx = {}
@@ -73,7 +72,11 @@ class GraphDataProcessor:
         for json_file in json_files:
             with open(json_file, 'r', encoding='utf-8') as f:
                 file_data = json.load(f)
-                all_data.extend(file_data)
+                if isinstance(file_data, dict) and 'data' in file_data:
+                    all_data.append(file_data)
+                else:
+                    # 이전 포맷 호환
+                    all_data.append({'task': '', 'data': file_data})
         return all_data
 
     
@@ -170,22 +173,25 @@ class GraphDataProcessor:
         return induction_output
     
     def process_single_graph(self, graph_data: Dict) -> Dict[str, Any]:
-        edge_index = self.build_edge_index(graph_data[0])
-        adj_matrix = self.build_adjacency_matrix(graph_data[0])
-        induction_output=self.extract_induction_output(graph_data[0][0])
+        task = graph_data.get('task', '')
+        data = graph_data['data']
+        edge_index = self.build_edge_index(data[0])
+        adj_matrix = self.build_adjacency_matrix(data[0])
+        induction_output = self.extract_induction_output(data[0][0])
         return {
             'edge_index': edge_index,
             'adjacency_matrix': adj_matrix,
-            'num_nodes': len(graph_data[0][1]['nodes'])+1,
-            'induction_output': induction_output
+            'num_nodes': len(data[0][1]['nodes']) + 1,
+            'induction_output': induction_output,
+            'task': task,
         }
-    
+
     def process_all_graphs(self, json_file_path: str) -> List[Dict[str, Any]]:
         data = self.load_data(json_file_path)
         processed_graphs = []
         for graph_data in data:
             processed_graph = self.process_single_graph(graph_data)
-            processed_graphs.append(processed_graph)    
+            processed_graphs.append(processed_graph)
         return processed_graphs
     
     def create_pyg_data(self, processed_graph: Dict[str, Any]) -> Data:

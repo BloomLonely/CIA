@@ -19,7 +19,8 @@ from GDesigner.graph.graph import Graph
 from GDesigner.tools.reader.readers import JSONLReader
 from GDesigner.utils.globals import Time
 from GDesigner.utils.globals import Cost, PromptTokens, CompletionTokens
-from datasets.gsm8k_dataset import gsm_data_process,gsm_get_predict
+from gdesigner_datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict, svamp_data_process_adversial
+from tqdm import tqdm
 
 def load_result(result_file):
     if not result_file.exists():
@@ -39,9 +40,9 @@ def load_config(config_path):
     
 def parse_args():
     parser = argparse.ArgumentParser(description="GDesigner Experiments on gsm8k")
-    parser.add_argument("--dataset_json", type=str, default="datasets/gsm8k/gsm8k.jsonl")
+    parser.add_argument("--dataset_json", type=str, default="datasets/svamp/svamp.jsonl")
     parser.add_argument("--result_file", type=str, default=None)
-    parser.add_argument("--llm_name", type=str, default="gpt-4o")
+    parser.add_argument("--llm_name", type=str, default="openai/gpt-4o-mini")
     parser.add_argument('--mode', type=str, default='FullConnected',
                         choices=['DirectAnswer', 'FullConnected', 'Random', 'Chain','Debate','Layered','Star'],
                         help="Mode of operation. Default is 'FullConnected'.")
@@ -50,7 +51,7 @@ def parse_args():
     parser.add_argument('--num_rounds',type=int,default=1,help="Number of optimization/inference rounds for one query")
     parser.add_argument('--pruning_rate', type=float, default=0.25,help="The Rate of Pruning. Default 0.05.")
     parser.add_argument('--num_iterations', type=int, default=10,help="The num of training iterations.")
-    parser.add_argument('--domain', type=str, default="gsm8k",help="Domain (the same as dataset name), default 'gsm8k'")
+    parser.add_argument('--domain', type=str, default="svamp",help="Domain (the same as dataset name), default 'svamp'")
     parser.add_argument('--agent_names', nargs='+', type=str, default=['MathSolver'],
                         help='Specify agent names as a list of strings')
     parser.add_argument('--agent_nums', nargs='+', type=int, default=[4],
@@ -70,13 +71,16 @@ def parse_args():
 async def main():
     args = parse_args()
     result_file = None
-    dataset = JSONLReader.parse_file(args.dataset_json)
-    dataset = gsm_data_process(dataset)
+    llm_safe = args.llm_name.replace("/", "_")
+    import json
+    with open(args.dataset_json, 'r', encoding='utf-8') as f:
+        raw = [json.loads(line) for line in f]
+    dataset = svamp_data_process_adversial(raw)
     current_time = Time.instance().value or time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     Time.instance().value = current_time
-    result_dir = Path(f"{GDesigner_ROOT}/result/gsm8k")
+    result_dir = Path(f"{GDesigner_ROOT}/result/svamp")
     result_dir.mkdir(parents=True, exist_ok=True)
-    result_file = result_dir / f"{args.domain}_{args.llm_name}_{current_time}.json"
+    result_file = result_dir / f"{args.domain}_{llm_safe}_{current_time}.json"
     
     agent_names = [name for name,num in zip(args.agent_names,args.agent_nums) for _ in range(num)]
     decision_method = args.decision_method
@@ -93,9 +97,9 @@ async def main():
     
     num_batches = int(len(dataset)/args.batch_size)
     total_solved, total_executed = (0, 0)
-    
-    for i_batch in range(num_batches):
-        print(f"Batch {i_batch}",80*'-')
+
+    pbar = tqdm(range(args.num_iterations), desc="[SVAMP] Batch", unit="batch")
+    for i_batch in pbar:
         start_ts = time.time()
         answer_log_probs = []
         answers = []
@@ -123,7 +127,10 @@ async def main():
         
         for task, answer, log_prob, true_answer in zip(current_batch, raw_answers, log_probs, answers):
             predict_answer = gsm_get_predict(answer[0])
-            is_solved = float(predict_answer)==float(true_answer)
+            try:
+                is_solved = float(predict_answer) == float(true_answer)
+            except (ValueError, TypeError):
+                is_solved = False
             total_solved = total_solved + is_solved
             total_executed = total_executed + 1
             accuracy = total_solved/ total_executed
@@ -152,14 +159,15 @@ async def main():
             total_loss.backward()
             optimizer.step()
         
-        print(f"Batch time {time.time() - start_ts:.3f}")
-        print(f"Accuracy: {accuracy}")
-        print("utilities:", utilities)
-        print("loss:", total_loss.item())
+        pbar.set_postfix({
+            "acc": f"{accuracy:.2f}",
+            "loss": f"{total_loss.item():.3f}",
+            "time": f"{time.time()-start_ts:.1f}s",
+        })
         
     checkpoint_dir = result_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / f"gcn_{args.domain}_{args.llm_name}_{current_time}_{args.mode}.pt"
+    checkpoint_path = checkpoint_dir / f"gcn_{args.domain}_{llm_safe}_{current_time}_{args.mode}.pt"
     torch.save({
         'gcn_state_dict': graph.gcn.state_dict(),
         'mlp_state_dict': graph.mlp.state_dict() if hasattr(graph, 'mlp') else None,

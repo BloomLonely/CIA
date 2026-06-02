@@ -19,7 +19,8 @@ from GDesigner.graph.graph import Graph
 from GDesigner.tools.reader.readers import JSONLReader
 from GDesigner.utils.globals import Time
 from GDesigner.utils.globals import Cost, PromptTokens, CompletionTokens
-from datasets.gsm8k_dataset import gsm_data_process,gsm_get_predict
+from gdesigner_datasets.gsm8k_dataset import gsm_data_process,gsm_get_predict
+from tqdm import tqdm
 
 def load_result(result_file):
     if not result_file.exists():
@@ -42,7 +43,7 @@ def parse_args():
     parser.add_argument("--dataset_json", type=str, default="datasets/gsm8k/gsm8k.jsonl")
     parser.add_argument("--domain", type=str, default="gsm8k")
     parser.add_argument("--result_file", type=str, default=None)
-    parser.add_argument("--llm_name", type=str, default="gpt-4o")
+    parser.add_argument("--llm_name", type=str, default="openai/gpt-4o-mini")
     parser.add_argument('--mode', type=str, default='FullConnected',
                         choices=['DirectAnswer', 'FullConnected', 'Random', 'Chain','Debate','Layered','Star'],
                         help="Mode of operation. Default is 'FullConnected'.")
@@ -51,7 +52,6 @@ def parse_args():
     parser.add_argument('--num_rounds',type=int,default=1,help="Number of optimization/inference rounds for one query")
     parser.add_argument('--pruning_rate', type=float, default=0.25,help="The Rate of Pruning. Default 0.05.")
     parser.add_argument('--num_iterations', type=int, default=10,help="The num of training iterations.")
-    parser.add_argument('--domain', type=str, default="gsm8k",help="Domain (the same as dataset name), default 'gsm8k'")
     parser.add_argument('--agent_names', nargs='+', type=str, default=['MathSolver'],
                         help='Specify agent names as a list of strings')
     parser.add_argument('--current_time', type=str, default=datetime.now().strftime('%Y%m%d%H%M'))
@@ -73,13 +73,15 @@ def parse_args():
 async def main():
     args = parse_args()
     result_file = None
+    llm_safe = args.llm_name.replace("/", "_")
+    task_set = set()
     dataset = JSONLReader.parse_file(args.dataset_json)
     dataset = gsm_data_process(dataset)
     current_time = Time.instance().value or time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     Time.instance().value = current_time
     result_dir = Path(f"{GDesigner_ROOT}/result/gsm8k")
     result_dir.mkdir(parents=True, exist_ok=True)
-    result_file = result_dir / f"{args.domain}_{args.llm_name}_{current_time}.json"
+    result_file = result_dir / f"{args.domain}_{llm_safe}_{current_time}.json"
     
     agent_names = [name for name,num in zip(args.agent_names,args.agent_nums) for _ in range(num)]
     decision_method = args.decision_method
@@ -98,88 +100,91 @@ async def main():
     
     num_batches = int(len(dataset)/args.batch_size)
     total_solved, total_executed = (0, 0)
-    
-    for i_batch in range(args.num_iterations):
-            print(f"Training Batch {i_batch}",80*'-')
-            start_ts = time.time()
-            answer_log_probs = []
-            answers = []
-            
-            current_batch = dataloader(dataset,args.batch_size,i_batch)
-            if current_batch is None:
-                print("No more data available.")
+
+    pbar = tqdm(range(args.num_iterations), desc="[GSM8K] Batch", unit="batch")
+    for i_batch in pbar:
+        start_ts = time.time()
+        answer_log_probs = []
+        answers = []
+
+        current_batch = dataloader(dataset,args.batch_size,i_batch)
+        if current_batch is None:
+            print("No more data available.")
+            break
+
+        for i_record, record in enumerate(current_batch):
+            if record["task"] in task_set:
                 break
-            
-            for i_record, record in enumerate(current_batch):
-                if record["task"] in task_set:
-                    break
-                realized_graph = copy.deepcopy(graph)
-                realized_graph.gcn = graph.gcn
-                realized_graph.mlp = graph.mlp
-                task = record["task"]
-                step = record["step"]
-                answer = record["answer"]
-                answers.append(answer)
-                input_dict = {"task": task}
-                answer_log_probs.append(asyncio.create_task(realized_graph.arun(input_dict,args.num_rounds)))
-            if len(answer_log_probs) == 0:
-                continue
-            raw_results = await asyncio.gather(*answer_log_probs)
-            raw_answers, log_probs = zip(*raw_results)
-            loss_list: List[torch.Tensor] = []
-            utilities: List[float] = []
-            data = load_result(result_file)
-            
-            for task, answer, log_prob, true_answer in zip(current_batch, raw_answers, log_probs, answers):
-                predict_answer = gsm_get_predict(answer[0])
-                is_solved = float(predict_answer)==float(true_answer)
-                total_solved = total_solved + is_solved
-                total_executed = total_executed + 1
-                accuracy = total_solved/ total_executed
-                utility = is_solved
-                utilities.append(utility)
-                single_loss = -log_prob * utility
-                loss_list.append(single_loss)
-                updated_item = {
-                    "Question": task,
-                    "Answer": true_answer,
-                    "Step": step,
-                    "Response": answer,
-                    "Attempt answer": predict_answer,
-                    "Solved": is_solved,
-                    "Total solved": total_solved,
-                    "Total executed": total_executed,
-                    "Accuracy": accuracy
-                }
-                data.append(updated_item)
-            with open(result_file, 'w',encoding='utf-8') as file:
-                json.dump(data, file, indent=4)
-            
-            total_loss = torch.mean(torch.stack(loss_list))
-            if args.optimized_spatial or args.optimized_temporal:
-                optimizer.zero_grad()
-                total_loss.backward()
-                optimizer.step()
-            
-            print(f"Batch time {time.time() - start_ts:.3f}")
-            print(f"Accuracy: {accuracy}")
-            print("utilities:", utilities)
-            print("loss:", total_loss.item())
-            print(f"Cost {Cost.instance().value}")
-            print(f"PromptTokens {PromptTokens.instance().value}")
-            print(f"CompletionTokens {CompletionTokens.instance().value}")
-        
-        checkpoint_dir = result_dir/"checkpoints"
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_path = checkpoint_dir / f"{args.domain}_{args.llm_name}_{current_time}_{args.mode}.pt"
-        torch.save({
-            'gcn_state_dict': graph.gcn.state_dict(),
-            'mlp_state_dict': graph.mlp.state_dict() if hasattr(graph, 'mlp') else None,
-            'optimizer_state_dict': optimizer.state_dict(),
-            'args': vars(args),
-            'current_time': current_time,
-        }, checkpoint_path)
-        print(f"Model saved to: {checkpoint_path}")
+            realized_graph = copy.deepcopy(graph)
+            realized_graph.gcn = graph.gcn
+            realized_graph.mlp = graph.mlp
+            task = record["task"]
+            step = record["step"]
+            answer = record["answer"]
+            answers.append(answer)
+            input_dict = {"task": task}
+            answer_log_probs.append(asyncio.create_task(realized_graph.arun(input_dict,args.num_rounds)))
+        if len(answer_log_probs) == 0:
+            continue
+        raw_results = await asyncio.gather(*answer_log_probs)
+        raw_answers, log_probs = zip(*raw_results)
+        loss_list: List[torch.Tensor] = []
+        utilities: List[float] = []
+        data = load_result(result_file)
+
+        for task, answer, log_prob, true_answer in zip(current_batch, raw_answers, log_probs, answers):
+            predict_answer = gsm_get_predict(answer[0])
+            try:
+                is_solved = float(predict_answer) == float(true_answer)
+            except (ValueError, TypeError):
+                is_solved = False
+            total_solved = total_solved + is_solved
+            total_executed = total_executed + 1
+            accuracy = total_solved/ total_executed
+            utility = is_solved
+            utilities.append(utility)
+            single_loss = -log_prob * utility
+            loss_list.append(single_loss)
+            updated_item = {
+                "Question": task,
+                "Answer": true_answer,
+                "Step": step,
+                "Response": answer,
+                "Attempt answer": predict_answer,
+                "Solved": is_solved,
+                "Total solved": total_solved,
+                "Total executed": total_executed,
+                "Accuracy": accuracy
+            }
+            data.append(updated_item)
+        with open(result_file, 'w',encoding='utf-8') as file:
+            json.dump(data, file, indent=4)
+
+        total_loss = torch.mean(torch.stack(loss_list))
+        if args.optimized_spatial or args.optimized_temporal:
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+
+        elapsed = time.time() - start_ts
+        pbar.set_postfix({
+            "acc": f"{accuracy:.2f}",
+            "loss": f"{total_loss.item():.3f}",
+            "time": f"{elapsed:.1f}s",
+            "tokens": f"{int(PromptTokens.instance().value+CompletionTokens.instance().value)}",
+        })
+
+    checkpoint_dir = result_dir/"checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = checkpoint_dir / f"{args.domain}_{llm_safe}_{current_time}_{args.mode}.pt"
+    torch.save({
+        'gcn_state_dict': graph.gcn.state_dict(),
+        'mlp_state_dict': graph.mlp.state_dict() if hasattr(graph, 'mlp') else None,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'args': vars(args),
+        'current_time': current_time,
+    }, checkpoint_path)
+    print(f"Model saved to: {checkpoint_path}")
 
 
 def get_kwargs(mode:Union[Literal['DirectAnswer'],Literal['FullConnected'],Literal['Random'],Literal['Chain'],Literal['Debate'],Literal['Layered'],Literal['Star']]

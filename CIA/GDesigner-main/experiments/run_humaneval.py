@@ -41,7 +41,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="GDesigner Experiments on HumanEval")
     parser.add_argument("--dataset_json", type=str, default="datasets/humaneval/humaneval-py.jsonl")
     parser.add_argument("--result_file", type=str, default=None)
-    parser.add_argument("--llm_name", type=str, default="gpt-4-1106-preview")
+    parser.add_argument("--llm_name", type=str, default="openai/gpt-4o-mini")
     parser.add_argument('--mode', type=str, default='FullConnected',
                         choices=['DirectAnswer', 'FullConnected', 'Random', 'Chain','Debate','Layered','Star'],
                         help="Mode of operation. Default is 'FullConnected'.")
@@ -73,12 +73,13 @@ def parse_args():
 async def main():
     args = parse_args()
     result_file = None
+    llm_safe = args.llm_name.replace("/", "_")
     dataset = JSONLReader.parse_file(args.dataset_json)
     current_time = args.current_time or Time.instance().value or time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     Time.instance().value = current_time
     result_dir = Path(f"{GDesigner_ROOT}/result/eval")
     result_dir.mkdir(parents=True, exist_ok=True)
-    result_file = result_dir / f"{args.domain}_{args.llm_name}_{current_time}_{args.model_name}.json"
+    result_file = result_dir / f"{args.domain}_{llm_safe}_{current_time}_{args.model_name}.json"
 
     agent_names = [name for name,num in zip(args.agent_names,args.agent_nums) for _ in range(num)]
     decision_method = args.decision_method
@@ -97,8 +98,9 @@ async def main():
     
     num_batches = int(len(dataset)/args.batch_size)
     total_solved, total_executed = (0, 0)
-    for i_batch in range(num_batches):
-        print(f"Batch {i_batch}",80*'-')
+    from tqdm import tqdm
+    pbar = tqdm(range(num_batches), desc="[HumanEval] Batch", unit="batch")
+    for i_batch in pbar:
         start_ts = time.time()
         answer_log_probs = []
         tests = []
@@ -154,14 +156,15 @@ async def main():
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
-        print(f"Batch time {time.time() - start_ts:.3f}")
-        print(f"Accuracy: {accuracy}")
-        print("utilities:", utilities)
-        print("loss:", total_loss.item())
+        pbar.set_postfix({
+            "acc": f"{accuracy:.2f}",
+            "loss": f"{total_loss.item():.3f}",
+            "time": f"{time.time()-start_ts:.1f}s",
+        })
 
     checkpoint_dir = result_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / f"gcn_{args.domain}_{args.llm_name}_{current_time}_{args.mode}.pt"
+    checkpoint_path = checkpoint_dir / f"gcn_{args.domain}_{llm_safe}_{current_time}_{args.mode}.pt"
     torch.save({
         'gcn_state_dict': graph.gcn.state_dict(),
         'mlp_state_dict': graph.mlp.state_dict() if hasattr(graph, 'mlp') else None,

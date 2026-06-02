@@ -2,14 +2,15 @@ import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.stdout.reconfigure(encoding='utf-8')
 from datetime import datetime
+import time
 import asyncio
 from typing import Union, Literal, List
 import argparse
 import random
 
 from GDesigner.graph.graph import Graph
-from datasets.mmlu_dataset import MMLUDataset
-from datasets.MMLU.download import download
+from gdesigner_datasets.mmlu_dataset import MMLUDataset
+from gdesigner_datasets.MMLU.download import download
 from experiments.train_mmlu import train
 from experiments.evaluate_mmlu import evaluate
 from GDesigner.utils.const import GDesigner_ROOT
@@ -39,7 +40,7 @@ def parse_args():
                         help="Number of optimization/inference rounds for one query")
     parser.add_argument('--pruning_rate', type=float, default=0.25,
                         help="The Rate of Pruning. Default 0.05.")
-    parser.add_argument('--llm_name', type=str, default="gpt-4o",
+    parser.add_argument('--llm_name', type=str, default="openai/gpt-4o-mini",
                         help="Model name, None runs the default ChatGPT4")
     parser.add_argument('--domain', type=str, default="mmlu",
                         help="Domain (the same as dataset name), default 'MMLU'")
@@ -75,9 +76,12 @@ async def main():
     dataset_train = MMLUDataset('dev')
     dataset_val = MMLUDataset('val')
     
+    current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     if args.optimized_spatial or args.optimized_temporal:
-        await train(graph=graph,dataset=dataset_train,num_iters=args.num_iterations,num_rounds=args.num_rounds,
-                    lr=args.lr,batch_size=args.batch_size)
+        await train(graph=graph, dataset=dataset_train, num_iters=args.num_iterations,
+                    num_rounds=args.num_rounds, lr=args.lr, batch_size=args.batch_size,
+                    llm_name=args.llm_name, domain=args.domain, mode=args.mode,
+                    current_time=current_time)
         
     
     score = await evaluate(graph=graph,dataset=dataset_val,num_rounds=args.num_rounds,limit_questions=limit_questions,eval_batch_size=args.batch_size)

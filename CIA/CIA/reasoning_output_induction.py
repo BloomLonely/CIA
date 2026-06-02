@@ -9,15 +9,16 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Literal
 import random
+from tqdm import tqdm
 
-sys.path.append('/data/CIA/GDesigner-main')
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'GDesigner-main')))
 
 
 from GDesigner.graph.graph import Graph
 from GDesigner.tools.reader.readers import JSONLReader
 from GDesigner.utils.const import GDesigner_ROOT
-from datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict
-from datasets.mmlu_dataset import MMLUDataset
+from gdesigner_datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict
+from gdesigner_datasets.mmlu_dataset import MMLUDataset
 
 
 class ReasoningOutputInduction:
@@ -26,7 +27,7 @@ class ReasoningOutputInduction:
         self,
         model_path: str,
         domain: str,
-        llm_name: str = "gpt-5",
+        llm_name: str = "openai/gpt-4o-mini",
         device: str = "cuda:0",
         mode: str = "FullConnected",
         agent_names: List[str] = None,  
@@ -67,68 +68,78 @@ class ReasoningOutputInduction:
         if checkpoint.get('mlp_state_dict') is not None and hasattr(self.graph, 'mlp'):
             self.graph.mlp.load_state_dict(checkpoint['mlp_state_dict'])
     
+    async def _process_single_record(self, record, i_batch, i_record):
+        """레코드 1개를 5회 반복 실행하고 JSON 저장."""
+        task = record["task"]
+        data_list = []
+        for i in range(5):
+            R_stars = []
+            flag = True
+            while flag:
+                realized_graph = copy.deepcopy(self.graph)
+                realized_graph.gcn = self.graph.gcn
+                realized_graph.mlp = self.graph.mlp
+                input_dict = {"task": task}
+                final_answers, log_probs, decision_node, nodes = await realized_graph.eval_arun(input_dict, self.num_rounds)
+                decision_outputs = decision_node.outputs if hasattr(decision_node, 'outputs') and decision_node.outputs else []
+                nodes_data = []
+                node_outputs = []
+                for node_id, node in nodes.items():
+                    spatial_pred = [f"{pred.id}({pred.role})" for pred in node.spatial_predecessors]
+                    spatial_succ = [f"{succ.id}({succ.role})" for succ in node.spatial_successors]
+                    temporal_pred = [f"{pred.id}({pred.role})" for pred in node.temporal_predecessors]
+                    temporal_succ = [f"{succ.id}({succ.role})" for succ in node.temporal_successors]
+                    if hasattr(node, 'outputs') and node.outputs:
+                        if isinstance(node.outputs, str):
+                            node_output = re.search(r'\[HISTORY\](.*?)\[/HISTORY\]', node.outputs)
+                            node_output = node_output.group(1).strip() if node_output else None
+                        else:
+                            node_output = None
+                    else:
+                        node_output = None
+                    node_outputs.append(node_output)
+                    nodes_data.append({
+                        'node_id': node_id,
+                        'node_role': node.role,
+                        'node_outputs': node_output,
+                        'spatial_predecessors': spatial_pred,
+                        'spatial_successors': spatial_succ,
+                        'temporal_predecessors': temporal_pred,
+                        'temporal_successors': temporal_succ,
+                        'spatial_connections': len(node.spatial_successors),
+                        'temporal_connections': len(node.temporal_successors)
+                    })
+                R_star = self.process_decision_outputs(decision_outputs)
+                if len(R_star) > 0 and all(node_output is not None for node_output in node_outputs):
+                    flag = False
+            R_stars.append(R_star)
+            R_stars.append({'decision': {'decision_node_id': decision_node.id, 'decision_node_role': decision_node.role, "decision_output": R_star[-1]}, 'nodes': nodes_data})
+            data_list.append(R_stars)
+        out_dir = Path(os.path.join(os.path.dirname(__file__), '..', '..', f'{self.domain}', 'reasoning_outputs', 'data_list'))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / f"{i_batch}_{i_record}.json", "w") as f:
+            json.dump({"task": task, "data": data_list}, f)
+
     async def process(self):
         def dataloader(data_list, batch_size, i_batch):
             return data_list[i_batch*batch_size:i_batch*batch_size + batch_size]
-        
-        count=0
+
+        total_records = self.num_batches * self.batch_size
+        pbar = tqdm(total=total_records, desc=f"[Stage2/{self.domain}] Records", unit="rec")
         for i_batch in range(self.num_batches):
             current_batch = dataloader(self.dataset, self.batch_size, i_batch)
             if current_batch is None:
                 print("No more data available.")
                 break
-            
-            for i_record, record in enumerate(current_batch):
-                count += 1
-                data_list = []
-                for i in range(5):
-                    R_stars = []
-                    flag = True
-                    while flag:
-                        realized_graph = copy.deepcopy(self.graph)
-                        realized_graph.gcn = self.graph.gcn
-                        realized_graph.mlp = self.graph.mlp
-                        task = record["task"]
-                        answer = record["answer"]
 
-                        input_dict = {"task": task}
-                        final_answers, log_probs, decision_node,nodes = await realized_graph.eval_arun(input_dict, self.num_rounds)
-                        decision_outputs = decision_node.outputs if hasattr(decision_node, 'outputs') and decision_node.outputs else []
-                        nodes_data = []
-                        node_outputs = []
-                        for node_id, node in nodes.items():
-                            spatial_pred = [f"{pred.id}({pred.role})" for pred in node.spatial_predecessors]
-                            spatial_succ = [f"{succ.id}({succ.role})" for succ in node.spatial_successors]
-                            temporal_pred = [f"{pred.id}({pred.role})" for pred in node.temporal_predecessors]
-                            temporal_succ = [f"{succ.id}({succ.role})" for succ in node.temporal_successors]
-                            if hasattr(node, 'outputs') and node.outputs:
-                                if isinstance(node.outputs, str):
-                                    node_output = re.search(r'\[HISTORY\](.*?)\[/HISTORY\]', node.outputs)
-                                    node_output = node_output.group(1).strip() if node_output else None
-                                else:
-                                    node_output = None
-                            else:
-                                node_output = None
-                            node_outputs.append(node_output)
-                            nodes_data.append({
-                                'node_id': node_id,
-                                'node_role': node.role,
-                                'node_outputs': node_output,
-                                'spatial_predecessors': spatial_pred,
-                                'spatial_successors': spatial_succ,
-                                'temporal_predecessors': temporal_pred,
-                                'temporal_successors': temporal_succ,
-                                'spatial_connections': len(node.spatial_successors),
-                                'temporal_connections': len(node.temporal_successors)
-                            })
-                        R_star = self.process_decision_outputs(decision_outputs)
-                        if len(R_star) > 0 and all(node_output is not None for node_output in node_outputs):
-                            flag = False
-                    R_stars.append(R_star)
-                    R_stars.append({'decision': {'decision_node_id': decision_node.id, 'decision_node_role': decision_node.role,"decision_output":R_star[-1]}, 'nodes': nodes_data})
-                    data_list.append(R_stars)
-                with open(f"/{self.domain}/reasoning_outputs/data_list/{i_batch}_{i_record}.json", "w") as f:
-                    json.dump(data_list, f)
+            # 배치 내 레코드들을 병렬 처리
+            tasks = [
+                self._process_single_record(record, i_batch, i_record)
+                for i_record, record in enumerate(current_batch)
+            ]
+            await asyncio.gather(*tasks)
+            pbar.update(len(current_batch))
+            pbar.set_postfix({"batch": i_batch})
 
     
     def _get_kwargs(self, mode: str, N: int) -> Dict[str, Any]:
@@ -209,7 +220,7 @@ def parse_args():
     parser.add_argument('--domain', type=str, default="xxx",
                        choices=['gsm8k', 'mmlu', 'svamp', 'humaneval'],
                        help='Domain of the dataset')
-    parser.add_argument('--llm_name', type=str, default='gpt-5',
+    parser.add_argument('--llm_name', type=str, default='openai/gpt-4o-mini',
                        help='Name of the LLM')
     parser.add_argument('--device', type=str, default='cuda:0',
                        help='Device (cuda:0, cpu)')
@@ -232,19 +243,19 @@ def load_dataset(dataset_path: str, dataset_type: str = None) -> List[Dict[str, 
         
         if dataset_type == "gsm8k":
             dataset = JSONLReader.parse_file(dataset_path)
-            from datasets.gsm8k_dataset import gsm_data_process_adversial
+            from gdesigner_datasets.gsm8k_dataset import gsm_data_process_adversial
             processed_data = gsm_data_process_adversial(dataset)
             return processed_data
         
         elif dataset_type == "svamp":
             with open(dataset_path, 'r',encoding='utf-8') as file:
                 dataset = json.load(file)
-            from datasets.gsm8k_dataset import svamp_data_process_adversial
+            from gdesigner_datasets.gsm8k_dataset import svamp_data_process_adversial
             processed_data = svamp_data_process_adversial(dataset)
             return processed_data
         
         elif dataset_type == "mmlu":
-            from datasets.mmlu_dataset import MMLUDataset
+            from gdesigner_datasets.mmlu_dataset import MMLUDataset
             dataset_train = MMLUDataset('dev',dataset_path)
             dataset_val = MMLUDataset('val',dataset_path)
             dataset=dataset_val
@@ -256,7 +267,7 @@ def load_dataset(dataset_path: str, dataset_type: str = None) -> List[Dict[str, 
         
         elif dataset_type == "humaneval":
             dataset = JSONLReader.parse_file(dataset_path)
-            from datasets.humaneval_dataset import humaneval_data_process
+            from gdesigner_datasets.humaneval_dataset import humaneval_data_process
             processed_data = humaneval_data_process(dataset)
             return processed_data
 

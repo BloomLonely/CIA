@@ -1,44 +1,35 @@
-import aiohttp
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Dict, Any
 from tenacity import retry, wait_random_exponential, stop_after_attempt
-from typing import Dict, Any
-
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 from GDesigner.llm.format import Message
 from GDesigner.llm.price import cost_count
 from GDesigner.llm.llm import LLM
 from GDesigner.llm.llm_registry import LLMRegistry
 
+load_dotenv(Path(__file__).resolve().parents[4] / ".env")
 
-
-MINE_BASE_URL = ""
-MINE_API_KEYS = ""
+_async_client = AsyncOpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+)
 
 
 @retry(wait=wait_random_exponential(max=100), stop=stop_after_attempt(3))
 async def achat(
     model: str,
     msg: List[Dict],):
-    request_url = MINE_BASE_URL
-    authorization_key = MINE_API_KEYS
-    headers = {
-        'Content-Type': 'application/json',
-        'authorization': authorization_key
-    }
-    data = {
-        "name": model,
-        "inputs": {
-            "stream": False,
-            "msg": repr(msg),
-        }
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(request_url, headers=headers ,json=data) as response:
-            response_data = await response.json()
-            prompt = "".join([item['content'] for item in msg])
-            cost_count(prompt,response_data['data'],model)
-            return response_data['data']
+    response = await _async_client.chat.completions.create(
+        model=model,
+        messages=msg,
+    )
+    result = response.choices[0].message.content
+    prompt = "".join([item['content'] for item in msg])
+    cost_count(prompt, result, model)
+    return result
 
 @LLMRegistry.register('GPTChat')
 class GPTChat(LLM):

@@ -6,10 +6,12 @@ import time
 import asyncio
 from typing import List
 import copy
+from pathlib import Path
 
 from GDesigner.graph.graph import Graph
 from experiments.accuracy import Accuracy
 from GDesigner.utils.globals import Cost, PromptTokens, CompletionTokens
+from GDesigner.utils.const import GDesigner_ROOT
 
 async def train(graph:Graph,
             dataset,
@@ -17,6 +19,10 @@ async def train(graph:Graph,
             num_rounds:int=1,
             lr:float=0.1,
             batch_size:int = 4,
+            llm_name:str = "",
+            domain:str = "",
+            mode:str = "FullConnected",
+            current_time:str = "",
           ) -> None:
     
     def infinite_data_loader() -> Iterator[pd.DataFrame]:
@@ -27,11 +33,11 @@ async def train(graph:Graph,
                     yield record
     
     loader = infinite_data_loader()
-    
-    optimizer = torch.optim.Adam(graph.gcn.parameters(), lr=lr)    
+    from tqdm import tqdm
+    optimizer = torch.optim.Adam(graph.gcn.parameters(), lr=lr)
     graph.gcn.train()
-    for i_iter in range(num_iters):
-        print(f"Iter {i_iter}", 80*'-')
+    pbar = tqdm(range(num_iters), desc="[MMLU] Iter", unit="iter")
+    for i_iter in pbar:
         start_ts = time.time()
         correct_answers = []
         answer_log_probs = []
@@ -41,7 +47,6 @@ async def train(graph:Graph,
             realized_graph.gcn = graph.gcn
             realized_graph.mlp = graph.mlp
             input_dict = dataset.record_to_input(record)
-            print(input_dict)
             answer_log_probs.append(asyncio.create_task(realized_graph.arun(input_dict,num_rounds)))
             correct_answer = dataset.record_to_target_answer(record)
             correct_answers.append(correct_answer)
@@ -63,30 +68,30 @@ async def train(graph:Graph,
             utilities.append(utility)
             single_loss = - log_prob * utility
             loss_list.append(single_loss)
-            print(f"correct answer:{correct_answer}")
     
         total_loss = torch.mean(torch.stack(loss_list))
         optimizer.zero_grad() 
         total_loss.backward()
         optimizer.step()
 
-        print("raw_answers:",raw_answers)
-        print("answers:",answers)
-        print(f"Batch time {time.time() - start_ts:.3f}")
-        print("utilities:", utilities) # [0.0, 0.0, 0.0, 1.0]
-        print("loss:", total_loss.item()) # 4.6237263679504395
-        print(f"Cost {Cost.instance().value}")
-        print(f"PromptTokens {PromptTokens.instance().value}")
-        print(f"CompletionTokens {CompletionTokens.instance().value}")
-        checkpoint_dir = result_dir / "checkpoints"
+        avg_util = sum(utilities) / len(utilities) if utilities else 0.0
+        pbar.set_postfix({
+            "acc": f"{avg_util:.2f}",
+            "loss": f"{total_loss.item():.3f}",
+            "time": f"{time.time()-start_ts:.1f}s",
+            "tokens": f"{int(PromptTokens.instance().value+CompletionTokens.instance().value)}",
+        })
+
+    result_dir = Path(f"{GDesigner_ROOT}/result/mmlu")
+    result_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = result_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / f"gcn_{args.domain}_{args.llm_name}_{current_time}_{args.mode}.pt"
+    llm_safe = llm_name.replace("/", "_")
+    checkpoint_path = checkpoint_dir / f"gcn_{domain}_{llm_safe}_{current_time}_{mode}.pt"
     torch.save({
         'gcn_state_dict': graph.gcn.state_dict(),
         'mlp_state_dict': graph.mlp.state_dict() if hasattr(graph, 'mlp') else None,
         'optimizer_state_dict': optimizer.state_dict(),
-        'args': vars(args),
         'current_time': current_time,
     }, checkpoint_path)
     print(f"Model saved to: {checkpoint_path}")
-        

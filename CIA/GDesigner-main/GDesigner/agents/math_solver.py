@@ -5,7 +5,7 @@ from GDesigner.agents.agent_registry import AgentRegistry
 from GDesigner.llm.llm_registry import LLMRegistry
 from GDesigner.prompt.prompt_set_registry import PromptSetRegistry
 from GDesigner.tools.coding.python_executor import execute_code_get_return
-from datasets.gsm8k_dataset import gsm_get_predict
+from gdesigner_datasets.gsm8k_dataset import gsm_get_predict
 
 @AgentRegistry.register('MathSolver')
 class MathSolver(Node):
@@ -57,7 +57,4 @@ class MathSolver(Node):
         if self.role == "Programming Expert":
             answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
             response += f"\nthe answer is {answer}"
-        print(f"#################system_prompt:{system_prompt}")
-        print(f"#################user_prompt:{user_prompt}")
-        print(f"#################response:{response}")
         return response

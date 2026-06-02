@@ -8,7 +8,7 @@ import json
 import os
 import pickle
 import re
-from utils import SemanticGraphBuilder, GraphEncoder, SentenceTransformerEncoder, Encoder, Decoder, TCLineEstimator, TCTreeEstimator
+from utils import SentenceTransformerEncoder, Encoder, Decoder, TCLineEstimator
 from utils import _client
 import random
 
@@ -26,7 +26,7 @@ class PerGraphSharedGenerator(nn.Module):
 
 class SelfSupervisedModel(nn.Module):
     
-    def __init__(self, text_encoder_name: str = "/data/llm/all-MiniLM-L6-v2", device: Optional[torch.device] = None, hidden_dim: int = 256,  dropout: float = 0.1, tokenizer_max_length: int =2048, data_path: str = None, encoder: str = None, max_agents: int = 5):
+    def __init__(self, text_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: Optional[torch.device] = None, hidden_dim: int = 256,  dropout: float = 0.1, tokenizer_max_length: int =2048, data_path: str = None, encoder: str = None, max_agents: int = 5):
         super().__init__()
         self.device = device
 
@@ -74,7 +74,7 @@ class SelfSupervisedModel(nn.Module):
                         {"role": "user", "content": USER_TPL.format(text=node_outputs[i][j])}
                     ]
                     response = client.chat.completions.create(
-                        model="gemini-2.5-pro",
+                        model="google/gemini-2.5-flash",
                         messages=messages,
                     )
                     node_outputs[i][j] = response.choices[0].message.content
@@ -182,10 +182,13 @@ class SelfSupervisedModel(nn.Module):
     @staticmethod
     def loss_self_supervised(
         s_loss,
-        rec_loss,   
+        rec_loss,
         align_loss,
         sup_loss,
         sim: torch.Tensor,
+        step: int = 0,
+        total_steps: int = 100,
+        alpha: float = 1.0,
+        beta: float = 1.0,
     ) -> torch.Tensor:
-
-        return rec_loss - s_loss+ align_loss + 0.1*sup_loss 
+        return rec_loss - s_loss + align_loss + 0.1 * sup_loss

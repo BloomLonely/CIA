@@ -7,6 +7,7 @@ import logging
 import datetime
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
 
 def parse_args():
 	p = argparse.ArgumentParser()
@@ -14,14 +15,14 @@ def parse_args():
 	p.add_argument('--data_path', type=str, default="",help="Path of reasoning outputs and grount-truth")
 	p.add_argument('--domain', type=str, default="",choices=['gsm8k', 'mmlu', 'svamp', 'humaneval'],help="Domain of the dataset")
 	p.add_argument('--device', type=str, default="cuda:0")
-	p.add_argument('--text_encoder', type=str, default='/data/llm/all-MiniLM-L6-v2')
+	p.add_argument('--text_encoder', type=str, default='sentence-transformers/all-MiniLM-L6-v2')
 	p.add_argument('--hidden_dim', type=int, default=256)
 	p.add_argument('--dropout', type=float, default=0.1)
 	p.add_argument('--tokenizer_max_length', type=int, default=128)
 	p.add_argument('--lr', type=float, default=0.0002)
 	p.add_argument('--weight_decay', type=float, default=1e-4)
 	p.add_argument('--edge_threshold', type=float, default=0.5)
-	p.add_argument('--epochs', type=int, default=50)
+	p.add_argument('--epochs', type=int, default=10)
 	p.add_argument('--encoder', type=str, default='sentence_transformers')
 	now_str = datetime.datetime.now().strftime("%Y%m%d%H%M")
 	p.add_argument('--log_path', type=str, default=f"train_{now_str}.log")
@@ -53,9 +54,10 @@ def main():
 
 	logger.info(json.dumps(vars(args), ensure_ascii=False))
 	
-	for idx, g in enumerate(graphs):
+	graph_pbar = tqdm(enumerate(graphs), total=len(graphs), desc=f"[Stage3/{args.domain}] Graphs", unit="graph")
+	for idx, g in graph_pbar:
 		trainer = SelfSupervisedTrainer(
-		data_path=args.data_path, 
+		data_path=args.data_path,
 		outputs=g["induction_output"],
 		encoder=args.encoder,
 		text_encoder_name=args.text_encoder,
@@ -70,20 +72,26 @@ def main():
 		max_agents=g["num_nodes"],
 	)
 		aucs=[]
-		for epoch in range(1, args.epochs + 1):
-			print(counter)
+		epoch_pbar = tqdm(range(1, args.epochs + 1), desc=f"  graph {idx+1}/{len(graphs)} epochs", leave=False, unit="ep")
+		for epoch in epoch_pbar:
 			eval_log = trainer.train_epoch(g)
 			if eval_log['auc'] > max_auc:
 				max_acc = eval_log['accuracy']
 				max_f1=eval_log['f1']
 				max_auc = eval_log['auc']
 			aucs.append(eval_log['auc'])
-		logger.info(f"auc={aucs}")
+			epoch_pbar.set_postfix({
+				"auc": f"{eval_log['auc']:.3f}",
+				"f1":  f"{eval_log['f1']:.3f}",
+				"acc": f"{eval_log['accuracy']:.3f}",
+			})
+		logger.info(f"graph {idx+1}: best_auc={max_auc:.4f}")
+		graph_pbar.set_postfix({"best_auc": f"{max_auc:.3f}", "graphs_done": counter+1})
 		auc += max_auc
 		acc += max_acc
 		f1 += max_f1
 		counter += 1
-logger.info(f'auc={auc/counter} f1={f1/counter} acc={acc/counter}')
+	logger.info(f'auc={auc/counter} f1={f1/counter} acc={acc/counter}')
 
 
 if __name__ == '__main__':

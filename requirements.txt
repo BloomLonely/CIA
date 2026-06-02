@@ -1,0 +1,57 @@
+# PyTorch 계열 및 PyG 의존 패키지는 install.sh에서 별도 설치
+# (CUDA 전용 인덱스 / PyG 전용 휠이 필요하므로 여기서 제외)
+
+# 핵심 ML / NLP
+datasets>=2.18.0
+transformers>=4.40.0
+sentence-transformers>=3.0.0
+scikit-learn>=1.4.0
+networkx>=3.0
+
+# LLM API 클라이언트
+openai>=1.30.0
+httpx>=0.27.0
+tenacity>=8.2.0
+
+# 데이터 / 수치 계산
+numpy>=1.26.0
+pandas>=2.2.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+tqdm>=4.66.0
+
+# 파일 파서
+python-docx
+markdown
+PyPDF2
+openpyxl
+beautifulsoup4
+pylatexenc
+python-pptx
+charset-normalizer
+
+# 검색 / 웹
+wikipedia
+arxiv>=2.1.0
+requests
+pytube
+
+# Google Custom Search
+google-api-python-client
+
+# 코드 유틸
+astunparse
+tiktoken
+shortuuid
+class-registry
+
+# 환경변수
+python-dotenv
+
+# pkg_resources 의존성 (setuptools>=81부터 pkg_resources 제거됨)
+setuptools<81
+
+# 기타
+fastapi
+pydantic>=2.0.0
+PyYAML

@@ -14,11 +14,16 @@ from torch_geometric.nn import GATConv, global_mean_pool
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel
 from sentence_transformers import SentenceTransformer
 from openai import OpenAI
-_client = OpenAI(base_url="",api_key="")
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+)
 
 
 class SentenceTransformerEncoder(nn.Module):
-	def __init__(self, device, model_name: str = "/data/llm/all-MiniLM-L6-v2"):
+	def __init__(self, device, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
 		super().__init__()
 		self.device = device
 		self.model = SentenceTransformer(model_name, device=self.device)

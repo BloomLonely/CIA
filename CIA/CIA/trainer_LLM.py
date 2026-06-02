@@ -71,7 +71,7 @@ class SelfSupervisedTrainer:
 			 data_path: str,
 			 outputs: str,
 			 encoder: str,
-			 text_encoder_name: str = "/data/llm/all-MiniLM-L6-v2",
+			 text_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2",
 			 device: Optional[str] = None,
 			 hidden_dim: int = 256,
 			 out_dim: int = 128,
@@ -231,12 +231,12 @@ class SelfSupervisedTrainer:
 		obj={}
 		trys=0
 		while trys<5 and obj=={}:
-			raw_edges = _client.chat.completions.create(
-                        model="gpt_5",
+			response = _client.chat.completions.create(
+                        model="openai/gpt-4.1-mini",
                         messages=messages_edges,
                     )
 			trys+=1
-			obj = self._safe_json_loads_for_edges(raw_edges)
+			obj = self._safe_json_loads_for_edges(response.choices[0].message.content)
 		pair_log = []
 
 		if isinstance(obj, dict) and "edge" in obj:
