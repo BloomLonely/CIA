@@ -65,6 +65,17 @@ class FinalWriteCode(Node):
         return response
 
 
+CIA_FINAL_CONSTRAINT = (
+    "\n\nYou MUST follow these output format constraints:\n"
+    "1. Collect all [HISTORY] tags from predecessor agents' outputs and merge them. "
+    "Append your own [REASONING OUTPUT] using '|||' as separator. "
+    "Wrap everything in [PREVIOUS HISTORY]...[/PREVIOUS HISTORY] tags.\n"
+    "2. Wrap your final reasoning and answer in [REASONING OUTPUT]...[/REASONING OUTPUT] tags.\n\n"
+    "Your response MUST end with:\n"
+    "[PREVIOUS HISTORY]<all predecessor history>|||<your reasoning>[/PREVIOUS HISTORY]\n"
+    "[REASONING OUTPUT]<your final decision and answer>[/REASONING OUTPUT]"
+)
+
 @AgentRegistry.register('FinalRefer')
 class FinalRefer(Node):
     def __init__(self, id: str | None =None,  domain: str = "", llm_name: str = "",):
@@ -73,16 +84,13 @@ class FinalRefer(Node):
         self.prompt_set = PromptSetRegistry.get(domain)
 
     def _process_inputs(self, raw_inputs:Dict[str,str], spatial_info:Dict[str,Any], temporal_info:Dict[str,Any], **kwargs)->List[Any]:
-        """ To be overriden by the descendant class """
-        """ Process the raw_inputs(most of the time is a List[Dict]) """
         self.role = self.prompt_set.get_decision_role()
-        self.constraint = self.prompt_set.get_decision_constraint()          
-        system_prompt = f"{self.role}.\n {self.constraint}"
-        
+        self.constraint = self.prompt_set.get_decision_constraint()
+        system_prompt = f"{self.role}.\n {self.constraint}" + CIA_FINAL_CONSTRAINT
+
         spatial_str = ""
         for id, info in spatial_info.items():
             spatial_str += id + ": " + info['output'] + "\n\n"
-        decision_few_shot = self.prompt_set.get_decision_few_shot()
         user_prompt = f"The task is:\n\n {raw_inputs['task']}.\n At the same time, the output of other agents is as follows:\n\n{spatial_str}"
         return system_prompt, user_prompt
                 

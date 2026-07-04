@@ -81,7 +81,8 @@ class ReasoningOutputInduction:
                 realized_graph.mlp = self.graph.mlp
                 input_dict = {"task": task}
                 final_answers, log_probs, decision_node, nodes = await realized_graph.eval_arun(input_dict, self.num_rounds)
-                decision_outputs = decision_node.outputs if hasattr(decision_node, 'outputs') and decision_node.outputs else []
+                _raw_outputs = decision_node.outputs if hasattr(decision_node, 'outputs') and decision_node.outputs else []
+                decision_outputs = _raw_outputs[0] if isinstance(_raw_outputs, list) and _raw_outputs else (_raw_outputs if isinstance(_raw_outputs, str) else "")
                 nodes_data = []
                 node_outputs = []
                 for node_id, node in nodes.items():
@@ -90,9 +91,11 @@ class ReasoningOutputInduction:
                     temporal_pred = [f"{pred.id}({pred.role})" for pred in node.temporal_predecessors]
                     temporal_succ = [f"{succ.id}({succ.role})" for succ in node.temporal_successors]
                     if hasattr(node, 'outputs') and node.outputs:
-                        if isinstance(node.outputs, str):
-                            node_output = re.search(r'\[HISTORY\](.*?)\[/HISTORY\]', node.outputs)
-                            node_output = node_output.group(1).strip() if node_output else None
+                        raw = node.outputs
+                        node_str = raw[0] if isinstance(raw, list) and raw else (raw if isinstance(raw, str) else None)
+                        if node_str:
+                            m = re.search(r'\[HISTORY\](.*?)\[/HISTORY\]', node_str, re.DOTALL)
+                            node_output = m.group(1).strip() if m else node_str
                         else:
                             node_output = None
                     else:
